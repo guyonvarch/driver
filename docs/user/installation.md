@@ -1,3 +1,3 @@
 ---
-title: Installation Guide for Dividat Driver
+title: Dividat Driver - Installation Guide
 ---

@@ -12,6 +12,8 @@ packager(
     icon: 'src/icons/dividat-icon',
     dir: '.',
     out: 'build',
+    prune: true,
+    packageManager: 'yarn',
     appCopyright: `(C) ${new Date().getFullYear()} ${pkg.author}`,
     win32metadata: {
       CompanyName: pkg.author,

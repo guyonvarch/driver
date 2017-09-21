@@ -1,19 +1,20 @@
 ---
-title: Dividat Driver
+title: Dividat Driver - Architecture
+autotoc: true
 ---
-Dividat Driver is a native application developed by Dividat GmbH. It provides
+Dividat Driver is a native application developed by Dividat AG. It provides
 - a general interface for communicating with Dividat Hardware;
 - the Dividat Senso Driver for communication with the Dividat Senso.
 
 ## Deployment
-Dividat Driver needs to be installed according to the [Installation guide](../user/installation).
+Dividat Driver needs to be installed according to the [Installation guide](../user/installation.md).
 
 ### Updates
 The Microsoft Windows version of the driver is packaged into an installer using Squirrel. Drivers installed in this way will auto-update by checking `https://dist.dividat.ch` for new versions periodically. For other operating systems, updates need to be installed manually according to the update instructions accompanied by each update.
 
 ## Interfaces
 
-[TODO] Show diagram
+![Dividat Driver overview](driver-overview.svg)
 
 ### Dividat Senso
 Dividat Driver and Dividat Senso communicate via the TCP protocol ([RFC 793](https://tools.ietf.org/html/rfc793)). The firmware of the Dividat Senso has two socket servers running. A **control socket** on `SENSO_ADDRESS:55567` for transmitting control data, and a **sensor socket** on `SENSO_ADDRESS:55568` for transmitting sensor data. Dividat Driver acts as a client to these two socket servers; it listens on the sensor socket and sends data to the control socket.

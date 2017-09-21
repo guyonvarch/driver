@@ -12,25 +12,23 @@ const log = require('electron-log')
 
 const fs = require('fs')
 
-let resourcesPath
-if (process.resourcesPath) {
-  resourcesPath = process.resourcesPath + '/app'
-} else {
-  resourcesPath = '.'
-}
+const packageBase = process.resourcesPath != null
+  ? (process.resourcesPath + '/app')
+  : '.'
 
 function factory (sensoAddress, recorder) {
   log.info('Dividat Driver (' + pkg.version + ') starting up...')
 
-    // Load and connect Senso
-  var senso = require('./senso')(sensoAddress, recorder)
+  // Load and connect Senso
+  const senso = require('./senso')(sensoAddress, recorder)
 
   // Start the server
 
-  var https = require('https')
-  var server = https.createServer({
-    key: fs.readFileSync(resourcesPath + '/ssl/key.pem'),
-    cert: fs.readFileSync(resourcesPath + '/ssl/cert.pem')
+  const https = require('https')
+  const atbash = require('./util/atbash')
+  const server = https.createServer({
+    key: atbash(fs.readFileSync(`${packageBase}/ssl/key.atbash`)),
+    cert: fs.readFileSync(`${packageBase}/ssl/cert.pem`)
   }, app)
   server.listen(8380, function () {
     log.info('SERVER: Listening on ' + server.address().port)
@@ -48,8 +46,8 @@ function factory (sensoAddress, recorder) {
     }
   })
 
-    // socket.io
-  var io = require('socket.io')(server)
+  // socket.io
+  const io = require('socket.io')(server)
 
   app.use(cors({
     origin: [/dividat\.(com|ch)$/, 'http://localhost:8080']

@@ -107,6 +107,7 @@ module.exports = (sensoAddress, recorder) => {
 
     // Forward the discovery of (additional) Sensos to Play
     discovery.on('found', (address) => {
+      log.verbose('mDNS: Found Senso at ' + address)
       ws.emit('BridgeMessage', {
         type: 'SensoDiscovered',
         connection: {

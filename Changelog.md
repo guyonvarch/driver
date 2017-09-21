@@ -1,5 +1,17 @@
 # Change Log
 
+## [0.3.5] - 2017-09-17
+
+### Changed
+
+- Disable all automatic connections to mDNS-discovered addresses
+
+## [0.3.4] - 2017-08-09
+
+### Fixed
+
+- Changes to build process to improve stability
+
 ## [0.3.3] - 2017-07-23
 
 ### Changed

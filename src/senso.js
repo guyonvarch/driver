@@ -5,7 +5,7 @@ const Connection = require('./persistentConnection')
 
 const DATA_PORT = 55568
 const CONTROL_PORT = 55567
-const DEFAULT_SENSO_ADDRESS = 'dividat-senso.local'
+const DEFAULT_SENSO_ADDRESS = '169.254.1.10'
 
 const log = require('electron-log')
 

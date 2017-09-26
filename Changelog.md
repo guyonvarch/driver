@@ -1,5 +1,11 @@
 # Change Log
 
+## [UNRELEASED]
+
+### Changed
+
+- Set default address for Senso to 169.254.1.10 for backwards-compatibility
+
 ## [0.3.7] - 2017-09-25
 
 ### Changed

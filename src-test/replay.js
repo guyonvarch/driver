@@ -4,7 +4,7 @@ const net = require('net')
 
 const bonjour = require('bonjour')()
 
-bonjour.publish({name: 'Senso data replayer', type: 'sensoControl', port: '55567'})
+bonjour.publish({name: 'Senso data replayer', txt: {ser_no: '01-23456789'}, type: 'sensoControl', port: '55567'})
 
 const EventEmitter = require('events')
 

@@ -5,6 +5,7 @@
 const child_process = require('child_process')
 const fs = require('fs')
 const tmp = require('tmp')
+const url = require('url')
 
 const certPath = process.argv[2]
 if (certPath == null) {
@@ -19,6 +20,7 @@ const issuerCert = fs
   .trim()
 // Find the OCSP endpoint for this cert
 const ocspUri = sslQuery(['x509', '-noout', '-ocsp_uri', '-in', certPath])
+const ocspHost = url.parse(ocspUri).host
 
 tmp.file((err, issuerCertPath, fd, cleanup) => {
   if (err) throw err
@@ -26,7 +28,7 @@ tmp.file((err, issuerCertPath, fd, cleanup) => {
   // Create intermediate cert file
   fs.writeSync(fd, issuerCert)
 
-  const report = sslQuery(['ocsp', '-issuer', issuerCertPath, '-cert', certPath, '-text', '-url', ocspUri])
+  const report = sslQuery(['ocsp', '-issuer', issuerCertPath, '-cert', certPath, '-text', '-url', ocspUri, '-header', 'Host', ocspHost])
 
   cleanup()
   if (!/^.*: good$/m.test(report)) {
@@ -44,5 +46,5 @@ function sslQuery (args) {
 
   if (res.error != null) throw res.error
 
-  return res.stdout.trim()
+  return res.stdout.trim() + "\n" + res.stderr.trim()
 }

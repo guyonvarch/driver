@@ -1,15 +1,18 @@
 package flex
 
-/* Connects to Senso Flex devices through a serial connection and combines serial data into measurement sets.
+/* Connects to Senso Flex devices through a serial connection or Bluetooth and
+combines serial data into measurement sets.
 
-This helps establish an indirect WebSocket connection to receive a stream of samples from the device.
+This helps establish an indirect WebSocket connection to receive a stream of
+samples from the device.
 
 The functionality of this module is as follows:
 
-- While connected, scan for serial devices that look like a potential Flex device
-- Connect to suitable serial devices and start polling for measurements
-- Minimally parse incoming data to determine start and end of a measurement
-- Send each complete measurement set to client as a binary package
+- While connected, scan for serial devices or Bluetooth devices that look like
+a potential Flex device.
+- Connect to suitable devices and start polling for measurements.
+- Minimally parse incoming data to determine start and end of a measurement.
+- Send each complete measurement set to client as a binary package.
 
 */
 
@@ -17,13 +20,20 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cskr/pubsub"
+	"github.com/dividat/driver/src/dividat-driver/bluetooth"
+	"github.com/muka/go-bluetooth/bluez/profile/device"
 	"github.com/sirupsen/logrus"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
+	"golang.org/x/sys/unix"
 )
 
 // Handle for managing SensingTex connection
@@ -88,6 +98,7 @@ func (handle *Handle) DeregisterSubscriber() {
 func listeningLoop(ctx context.Context, logger *logrus.Entry, onReceive func([]byte)) {
 	for {
 		scanAndConnectSerial(ctx, logger, onReceive)
+		connectBluetooth(ctx, logger, onReceive)
 
 		// Terminate if we were cancelled
 		if ctx.Err() != nil {
@@ -98,12 +109,14 @@ func listeningLoop(ctx context.Context, logger *logrus.Entry, onReceive func([]b
 	}
 }
 
+// Serial
+
 // One pass of browsing for serial devices and trying to connect to them turn by turn, first
 // successful connection wins.
 func scanAndConnectSerial(ctx context.Context, logger *logrus.Entry, onReceive func([]byte)) {
 	ports, err := enumerator.GetDetailedPortsList()
 	if err != nil {
-		logger.WithField("error", err).Info("Could not list serial devices.")
+		logger.WithError(err).Info("Could not list serial devices.")
 		return
 	}
 
@@ -115,8 +128,8 @@ func scanAndConnectSerial(ctx context.Context, logger *logrus.Entry, onReceive f
 
 		logger.WithField("name", port.Name).WithField("vendor", port.VID).Debug("Considering serial port.")
 
-		if isFlexLike(port) {
-			connectSerial(ctx, logger, port.Name, onReceive)
+		if serialIsFlexLike(port) {
+			measureWithSerialConnection(ctx, logger, onReceive, port.Name)
 		}
 	}
 }
@@ -125,13 +138,142 @@ func scanAndConnectSerial(ctx context.Context, logger *logrus.Entry, onReceive f
 //
 // Vendor IDs:
 //   16C0 - Van Ooijen Technische Informatica (Teensy)
-func isFlexLike(port *enumerator.PortDetails) bool {
+func serialIsFlexLike(port *enumerator.PortDetails) bool {
 	vendorId := strings.ToUpper(port.VID)
 
 	return vendorId == "16C0"
 }
 
-// Serial communication
+// Connect to an individual serial port and start the measurement
+func measureWithSerialConnection(
+	ctx context.Context,
+	logger *logrus.Entry,
+	onReceive func([]byte),
+	serialName string,
+) {
+	mode := &serial.Mode{
+		BaudRate: 115200,
+		Parity:   serial.NoParity,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+	}
+
+	logger.WithField("name", serialName).Info("Attempting to connect with serial port.")
+	port, err := serial.Open(serialName, mode)
+	if err != nil {
+		logger.WithField("config", mode).WithError(err).Info("Failed to open connection to serial port.")
+		return
+	}
+	defer func() {
+		logger.WithField("name", serialName).Info("Disconnecting from serial port.")
+		port.Close()
+	}()
+
+	reader := bufio.NewReader(port)
+	readByte := func() (byte, error) {
+		return reader.ReadByte()
+	}
+
+	write := func(bytes []byte) error {
+		_, err = port.Write(bytes)
+		return err
+	}
+
+	logger.Info("Starting Senso Flex measurement with serial port.")
+	measure(ctx, logger, onReceive, readByte, write)
+}
+
+// Bluetooth
+
+// List connected bluetooth devices and try to connect to them turn by turn,
+// first successful connection wins.
+func connectBluetooth(ctx context.Context, logger *logrus.Entry, onReceive func([]byte)) {
+	for devPath, dev := range bluetooth.GetConnectedDevices() {
+		// Terminate if we have been cancelled
+		if ctx.Err() != nil {
+			return
+		}
+
+		if bluetoothIsFlexLike(dev) {
+			measureWithBluetoothConnection(ctx, logger, onReceive, devPath, dev)
+		}
+	}
+
+	// Flushing devices, otherwise a reconnected device can miss to connect
+	bluetooth.FlushDevices()
+}
+
+func bluetoothIsFlexLike(dev *device.Device1) bool {
+	return strings.HasPrefix(dev.Properties.Name, "DIVIDAT_")
+}
+
+// Connect via bluetooth and start the measurement
+func measureWithBluetoothConnection(
+	ctx context.Context,
+	logger *logrus.Entry,
+	onReceive func([]byte),
+	devPath string,
+	dev *device.Device1,
+) {
+	if !dev.Properties.Paired {
+		logger.Infof("Pairing device %s", dev.Properties.Name)
+		err := bluetooth.Pair(devPath, dev)
+		if err != nil {
+			logger.WithError(err).Error("Error pairing bluetooth device.")
+			return
+		}
+	}
+
+	fd, err := unix.Socket(syscall.AF_BLUETOOTH, syscall.SOCK_STREAM, unix.BTPROTO_RFCOMM)
+	if err != nil {
+		logger.WithError(err).Error("Error creating socket for the Bluetooth device.")
+		return
+	}
+	defer unix.Close(fd)
+
+	addr := &unix.SockaddrRFCOMM{Addr: str2ba(dev.Properties.Address), Channel: 1}
+	err = unix.Connect(fd, addr)
+	if err != nil {
+		logger.WithError(err).Error("Error connecting to socket for the Bluetooth device.")
+		return
+	}
+
+	readByte := func() (byte, error) {
+		data := make([]byte, 1)
+		n, err := unix.Read(fd, data)
+		if err != nil {
+			return ' ', err
+		} else if n != 1 {
+			return ' ', errors.New(fmt.Sprintf("Received %d bytes instead of 1.", n))
+		} else {
+			return data[0], nil
+		}
+	}
+
+	write := func(bytes []byte) error {
+		_, err = unix.Write(fd, bytes)
+		return err
+	}
+
+	logger.Info("Starting Senso Flex measurement with Bluetooth.")
+	measure(ctx, logger, onReceive, readByte, write)
+
+	// Forcing the current device to be cleaned up
+	bluetooth.FlushDevices()
+}
+
+// str2ba converts MAC address string representation to little-endian byte array
+func str2ba(addr string) [6]byte {
+	a := strings.Split(addr, ":")
+	var b [6]byte
+	for i, tmp := range a {
+		u, _ := strconv.ParseUint(tmp, 16, 8)
+		b[len(b)-1-i] = byte(u)
+	}
+	return b
+}
+
+// Pipe flex signal into the callback, summarizing package units into a buffer.
 
 type ReaderState int
 
@@ -151,36 +293,21 @@ const (
 	BYTES_PER_SAMPLE    = 4
 )
 
-// Actually attempt to connect to an individual serial port and pipe its signal into the callback, summarizing
-// package units into a buffer.
-func connectSerial(ctx context.Context, logger *logrus.Entry, serialName string, onReceive func([]byte)) {
-	mode := &serial.Mode{
-		BaudRate: 115200,
-		Parity:   serial.NoParity,
-		DataBits: 8,
-		StopBits: serial.OneStopBit,
-	}
-
+func measure(
+	ctx context.Context,
+	logger *logrus.Entry,
+	onReceive func([]byte),
+	readByte func() (byte, error),
+	write func([]byte) error,
+) {
 	START_MEASUREMENT_CMD := []byte{'S', '\n'}
 
-	logger.WithField("name", serialName).Info("Attempting to connect with serial port.")
-	port, err := serial.Open(serialName, mode)
+	err := write(START_MEASUREMENT_CMD)
 	if err != nil {
-		logger.WithField("config", mode).WithField("error", err).Info("Failed to open connection to serial port.")
-		return
-	}
-	defer func() {
-		logger.WithField("name", serialName).Info("Disconnecting from serial port.")
-		port.Close()
-	}()
-
-	_, err = port.Write(START_MEASUREMENT_CMD)
-	if err != nil {
-		logger.WithField("error", err).Info("Failed to write start message to serial port.")
+		logger.WithError(err).Info("Failed to write start message during flex measurement.")
 		return
 	}
 
-	reader := bufio.NewReader(port)
 	state := WAITING_FOR_HEADER
 	var samplesLeftInSet int
 	var bytesLeftInSample int
@@ -192,8 +319,9 @@ func connectSerial(ctx context.Context, logger *logrus.Entry, serialName string,
 			return
 		}
 
-		input, err := reader.ReadByte()
+		input, err := readByte()
 		if err != nil {
+			logger.WithError(err).Info("Error reading byte during flex measurement.")
 			return
 		}
 
@@ -207,8 +335,9 @@ func connectSerial(ctx context.Context, logger *logrus.Entry, serialName string,
 			// The number of measurements in each set may vary and is
 			// given as two consecutive bytes (big-endian).
 			msb := input
-			lsb, err := reader.ReadByte()
+			lsb, err := readByte()
 			if err != nil {
+				logger.WithError(err).Info("Error reading byte during flex measurement.")
 				return
 			}
 			samplesLeftInSet = int(binary.BigEndian.Uint16([]byte{msb, lsb}))
@@ -232,9 +361,9 @@ func connectSerial(ctx context.Context, logger *logrus.Entry, serialName string,
 
 					// Get ready for next set and request it
 					state = WAITING_FOR_HEADER
-					_, err = port.Write(START_MEASUREMENT_CMD)
+					err = write(START_MEASUREMENT_CMD)
 					if err != nil {
-						logger.WithField("error", err).Info("Failed to write poll message to serial port.")
+						logger.WithError(err).Info("Failed to write poll message during flex measurement.")
 						return
 					}
 				} else {

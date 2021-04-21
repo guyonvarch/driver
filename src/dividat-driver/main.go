@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/dividat/driver/src/dividat-driver/bluetooth"
 	"github.com/dividat/driver/src/dividat-driver/firmware"
 	"github.com/dividat/driver/src/dividat-driver/logging"
 	"github.com/dividat/driver/src/dividat-driver/server"
@@ -60,6 +61,8 @@ func runDaemon() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	go bluetooth.Monitor()
 
 	log.Fatal(s.Run())
 }

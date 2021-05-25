@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -293,6 +294,38 @@ const (
 	BYTES_PER_SAMPLE    = 4
 )
 
+var bits_per_second []int
+var last_reception_time int64 = 0
+
+func storeReadByte() {
+	if last_reception_time == 0 {
+		bits_per_second = append(bits_per_second, 1)
+		last_reception_time = time.Now().Unix()
+	} else {
+		var new_reception_time = time.Now().Unix()
+		if new_reception_time == last_reception_time {
+			bits_per_second[len(bits_per_second)-1]++
+		} else {
+			for i := last_reception_time; i < new_reception_time; i++ {
+				bits_per_second = append(bits_per_second, 0)
+			}
+			bits_per_second[len(bits_per_second)-1]++
+		}
+		last_reception_time = new_reception_time
+	}
+}
+
+func writeBitsPerSecond() {
+	var str = ""
+	for _, n := range bits_per_second {
+		str += fmt.Sprintf("%d\n", n)
+	}
+
+	f, _ := os.Create("bits-per-second.txt")
+	f.WriteString(str)
+	f.Close()
+}
+
 func measure(
 	ctx context.Context,
 	logger *logrus.Entry,
@@ -301,6 +334,8 @@ func measure(
 	write func([]byte) error,
 ) {
 	START_MEASUREMENT_CMD := []byte{'S', '\n'}
+
+	defer writeBitsPerSecond()
 
 	err := write(START_MEASUREMENT_CMD)
 	if err != nil {
@@ -319,6 +354,7 @@ func measure(
 			return
 		}
 
+		storeReadByte()
 		input, err := readByte()
 		if err != nil {
 			logger.WithError(err).Info("Error reading byte during flex measurement.")
@@ -335,6 +371,7 @@ func measure(
 			// The number of measurements in each set may vary and is
 			// given as two consecutive bytes (big-endian).
 			msb := input
+			storeReadByte()
 			lsb, err := readByte()
 			if err != nil {
 				logger.WithError(err).Info("Error reading byte during flex measurement.")
